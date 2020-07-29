@@ -1,8 +1,7 @@
-*.o
-*.ko
-*.cmd
-*.mod
+*
+!.gitignore
+!*.c
+!*.h
+!Makefile
+!*/
 *.mod.c
-*.order
-*.symvers
-user
