@@ -3,5 +3,6 @@
 !*.c
 !*.h
 !Makefile
+!arm
 !*/
 *.mod.c
