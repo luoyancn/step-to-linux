@@ -1,4 +1,3 @@
-KDIR := /opt/terasic-linux-socfpga/
 obj-m += awcloud.o
 
 PWD := $(shell pwd)

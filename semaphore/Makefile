@@ -1,13 +1,10 @@
 obj-m += awcloud.o
-CURRENT_PATH:=$(shell pwd)
-LINUX_KERNEL:=$(shell uname -r)
-LINUX_KERNEL_PATH:=/usr/src/linux-headers-$(LINUX_KERNEL)
 
-.PHONY: all clean
+PWD := $(shell pwd)
 
-all:
-	make -C $(LINUX_KERNEL_PATH) M=$(CURRENT_PATH) modules
+default:
+	make -C $(KDIR) M=$(PWD) modules
 
 clean:
-	make -C $(LINUX_KERNEL_PATH) M=$(CURRENT_PATH) clean
+	make -C $(KDIR) M=$(PWD) clean
 

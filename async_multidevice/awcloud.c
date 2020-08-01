@@ -44,8 +44,17 @@ static int open_awcloud_async(struct inode *inodep, struct file *filp)
 	return 0;
 }
 
+static int fasync_awcloud_async(int fd, struct file *filp, int on)
+{
+	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
+
+	return fasync_helper(fd, filp, on, &dev->async_queue);
+}
+
+
 static int release_awcloud_async(struct inode *inodep, struct file *filp)
 {
+	fasync_awcloud_async(-1, filp, 0);
 	return 0;
 }
 
@@ -287,13 +296,6 @@ __poll_t poll_awcloud_async(
 	up(&dev->sem);
 
 	return mask;
-}
-
-static int fasync_awcloud_async(int fd, struct file *filp, int on)
-{
-	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
-
-	return fasync_helper(fd, filp, on, &dev->async_queue);
 }
 
 const static struct file_operations awcloud_async_fops = {

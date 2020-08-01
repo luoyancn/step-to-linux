@@ -18,50 +18,51 @@
 #define BUFFER_LEN 4096
 #define MEM_CLEAR 0x1
 
-struct awcloud_async {
-	dev_t                dev_id;
-	unsigned int         major;
-	unsigned int         minor;
+struct awcloud_platform {
 	unsigned int         used_len;
 	struct device        *device;
 	struct class         *class;
-	struct cdev          *cdev;
 	struct fasync_struct *async_queue;
 	char                 buffer[BUFFER_LEN];
 	struct semaphore     sem;
+	struct cdev          cdev;
 	wait_queue_head_t    r_wait;
 	wait_queue_head_t    w_wait;
 };
 
-static struct awcloud_async *dev;
+static struct awcloud_platform *dev;
 static unsigned int major;
+static unsigned int num_devices;
 module_param(major, uint, 0444);
+module_param(num_devices, uint, 0444);
 
-static int fasync_awcloud_async(int fd, struct file *filp, int on)
+static int open_awcloud_platform(struct inode *inodep, struct file *filp)
 {
-	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
+	struct awcloud_platform *dev = container_of(
+		inodep->i_cdev, struct awcloud_platform, cdev);
+	filp->private_data = dev;
+	return 0;
+}
+
+static int fasync_awcloud_platform(int fd, struct file *filp, int on)
+{
+	struct awcloud_platform *dev = (struct awcloud_platform *)filp->private_data;
 
 	return fasync_helper(fd, filp, on, &dev->async_queue);
 }
 
 
-static int open_awcloud_async(struct inode *inodep, struct file *filp)
+static int release_awcloud_platform(struct inode *inodep, struct file *filp)
 {
-	filp->private_data = dev;
+	fasync_awcloud_platform(-1, filp, 0);
 	return 0;
 }
 
-static int release_awcloud_async(struct inode *inodep, struct file *filp)
-{
-	fasync_awcloud_async(-1, filp, 0);
-	return 0;
-}
-
-static ssize_t read_awcloud_async(struct file *filp,
+static ssize_t read_awcloud_platform(struct file *filp,
 	char __user *user_buffer, size_t count, loff_t *ppos)
 {
 	int ret = 0;
-	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
+	struct awcloud_platform *dev = (struct awcloud_platform *)filp->private_data;
 
 	DECLARE_WAITQUEUE(wait, current);
 
@@ -118,11 +119,11 @@ out:
 	return ret;
 }
 
-static ssize_t write_awcloud_async(struct file *filp,
+static ssize_t write_awcloud_platform(struct file *filp,
 	const char __user *user_buffer, size_t count, loff_t *ppos)
 {
 	int ret = 0;
-	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
+	struct awcloud_platform *dev = (struct awcloud_platform *)filp->private_data;
 	DECLARE_WAITQUEUE(wait, current);
 
 	pr_info(
@@ -181,17 +182,18 @@ out:
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36)
-int ioctl_awcloud_async(struct inode *inodep,
+int ioctl_awcloud_platform(struct inode *inodep,
 	struct file *filp, unsigned int cmd, unsigned long arg)
 {
 #else
-static long ioctl_awcloud_async(struct file *filp,
+static long ioctl_awcloud_platform(struct file *filp,
 	unsigned int cmd, unsigned long arg)
 {
 	//struct inode *inodep = file_inode(filp);
 #endif
-	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
+	struct awcloud_platform *dev = (struct awcloud_platform *)filp->private_data;
 
+	pr_info("Calling the ioctl function\n");
 	switch (cmd) {
 	case MEM_CLEAR:
 		if (down_interruptible(&dev->sem)) {
@@ -211,11 +213,11 @@ static long ioctl_awcloud_async(struct file *filp,
 	return 0;
 }
 
-static loff_t llseek_awcloud_async(struct file *filp,
+static loff_t llseek_awcloud_platform(struct file *filp,
 	loff_t offset, int whence)
 {
 	loff_t ret = 0;
-	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
+	struct awcloud_platform *dev = (struct awcloud_platform *)filp->private_data;
 
 	pr_info(
 		"Calling the llseek function of this device,"
@@ -270,17 +272,17 @@ static loff_t llseek_awcloud_async(struct file *filp,
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
-unsigned int poll_awcloud_async(
+unsigned int poll_awcloud_platform(
 	struct file *filp, struct poll_table_struct *wait)
 {
 	unsigned int mask = 0;
 #else
-__poll_t poll_awcloud_async(
+__poll_t poll_awcloud_platform(
 	struct file *filp, struct poll_table_struct *wait)
 {
 	__poll_t mask = 0;
 #endif
-	struct awcloud_async *dev = (struct awcloud_async *)filp->private_data;
+	struct awcloud_platform *dev = (struct awcloud_platform *)filp->private_data;
 
 	down(&dev->sem);
 	poll_wait(filp, &dev->r_wait, wait);
@@ -296,126 +298,149 @@ __poll_t poll_awcloud_async(
 	return mask;
 }
 
-static const struct file_operations awcloud_async_fops = {
+const static struct file_operations awcloud_platform_fops = {
 	.owner          = THIS_MODULE,
-	.open           = open_awcloud_async,
-	.release        = release_awcloud_async,
-	.read           = read_awcloud_async,
-	.write          = write_awcloud_async,
-	.llseek         = llseek_awcloud_async,
-	.poll           = poll_awcloud_async,
-	.fasync         = fasync_awcloud_async,
+	.open           = open_awcloud_platform,
+	.release        = release_awcloud_platform,
+	.read           = read_awcloud_platform,
+	.write          = write_awcloud_platform,
+	.llseek         = llseek_awcloud_platform,
+	.poll           = poll_awcloud_platform,
+	.fasync         = fasync_awcloud_platform,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 0)
-	.ioctl          = ioctl_awcloud_async,
+	.ioctl          = ioctl_awcloud_platform,
 #else
-	.compat_ioctl   = ioctl_awcloud_async,
-	.unlocked_ioctl = ioctl_awcloud_async,
+	.compat_ioctl   = ioctl_awcloud_platform,
+	.unlocked_ioctl = ioctl_awcloud_platform,
 #endif
 };
 
-static int awcloud_async_setup_chrdev(struct awcloud_async *dev)
+static int awcloud_platform_setup_chrdev(struct awcloud_platform *dev, int index)
 {
 	int result = 0;
+	char device_name[10];
+	dev_t dev_id = MKDEV(major, index);
 
-	if (major > 0) {
-		dev->dev_id = MKDEV(major, 0);
-		result = register_chrdev_region(dev->dev_id, 1, DEV_NAME);
-	} else {
-		result = alloc_chrdev_region(&(dev->dev_id), 0, 1, DEV_NAME);
-	}
-	if (result) {
-		pr_err("Failed to register the char device\n");
-		result = -EFAULT;
-		goto chrdev_region_err;
-	}
-
-	dev->major = MAJOR(dev->dev_id);
-	dev->minor = MINOR(dev->dev_id);
-
-	dev->cdev = cdev_alloc();
-	if (!dev->cdev) {
-		pr_err("Failed to alloc cdev struct\n");
-		result = -EFAULT;
-		goto cdev_alloc_err;
-	}
-
-	dev->cdev->owner = THIS_MODULE;
-
-	cdev_init(dev->cdev, &awcloud_async_fops);
-
-	result = cdev_add(dev->cdev, dev->dev_id, 1);
-	if (result) {
-		pr_err("Failed to add awcloud_async into Linux system\n");
-		result = -EFAULT;
+	dev->cdev.owner = THIS_MODULE;
+	cdev_init(&dev->cdev, &awcloud_platform_fops);
+	if (cdev_add(&dev->cdev, dev_id, 1)) {
+		pr_err("Failed to add char dev into system\n");
+		result = -1;
 		goto cdev_add_err;
 	}
 
-	dev->class = class_create(THIS_MODULE, DEV_NAME);
-	if (IS_ERR(dev->class)) {
-		result = PTR_ERR(dev->class);
-		goto class_create_err;
-	}
-
-	dev->device = device_create(dev->class, NULL,
-		dev->dev_id, NULL, DEV_NAME);
+	sprintf(device_name, DEV_NAME"%d", index);
+	dev->device = device_create(
+		dev->class, NULL, dev_id, NULL, device_name);
 	if (IS_ERR(dev->device)) {
-		result = PTR_ERR(dev->device);
+		result = -1;
 		goto device_create_err;
 	}
 
 	memset(dev->buffer, 0, BUFFER_LEN);
 	dev->used_len = 0;
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36) && !defined(init_MUTEX)
-	sema_init(&(dev->sem), 1);
-#else
-	init_MUTEX(&(dev->sem));
-#endif
 
+	sema_init(&(dev->sem), 1);
 	init_waitqueue_head(&dev->r_wait);
 	init_waitqueue_head(&dev->w_wait);
-	return 0;
+	return result;
 
 device_create_err:
-	class_destroy(dev->class);
-class_create_err:
-	cdev_del(dev->cdev);
-cdev_alloc_err:
+	cdev_del(&dev->cdev);
 cdev_add_err:
-	unregister_chrdev_region(dev->dev_id, 1);
-chrdev_region_err:
 	return result;
 }
 
-static int __init awcloud_async_init(void)
+static void release_awcloud_platform_chrdev(struct awcloud_platform *dev, int index)
+{
+	dev_t dev_id = MKDEV(major, index);
+
+	device_destroy(dev->class, dev_id);
+	cdev_del(&dev->cdev);
+}
+
+static int __init awcloud_platform_init(void)
 {
 	int result = 0;
+	int index = 0;
+	int tmp[3] = {0};
+	dev_t dev_id;
+	struct class *class = NULL;
 
-	dev = kzalloc(sizeof(struct awcloud_async), GFP_KERNEL);
+	if (0 >= num_devices) {
+		num_devices = 1;
+	}
+
+	dev = kzalloc(sizeof(struct awcloud_platform) * num_devices, GFP_KERNEL);
 	if (!dev) {
 		result = -ENOMEM;
 		goto finally;
 	}
-	result = awcloud_async_setup_chrdev(dev);
-	if (0 > result) {
-		kfree(dev);
-		goto finally;
+
+	if (major > 0) {
+		dev_id = MKDEV(major, 0);
+		result = register_chrdev_region(
+			dev_id, num_devices, DEV_NAME);
+	} else {
+		result = alloc_chrdev_region(
+			&dev_id, 0, num_devices, DEV_NAME);
 	}
 
+	if (result) {
+		pr_err("Failed to alloc the char dev number\n");
+		result = -EFAULT;
+		goto alloc_dev_id_err;
+	}
+
+	major = MAJOR(dev_id);
+	class = class_create(THIS_MODULE, DEV_NAME);
+	if (IS_ERR(class)) {
+		result = -1;
+		goto class_create_err;
+	}
+
+	for (index = 0; index < num_devices; index++) {
+		(dev+index)->class = class;
+		tmp[index] = awcloud_platform_setup_chrdev(dev+index, index);
+		result |= tmp[index];
+	}
+
+	if (result) {
+		for (index = 0; index < num_devices; index++) {
+			if (!tmp[index]) {
+				release_awcloud_platform_chrdev(dev+index, index);
+			}
+		}
+		goto setup_chrdev_err;
+	}
+
+	return result;
+
+setup_chrdev_err:
+	class_destroy(class);
+class_create_err:
+	unregister_chrdev_region(MKDEV(major, 0), num_devices);
+alloc_dev_id_err:
+	kfree(dev);
 finally:
 	return result;
 }
 
-static void __exit awcloud_async_exit(void)
+static void __exit awcloud_platform_exit(void)
 {
-	device_destroy(dev->class, dev->dev_id);
+	int index = 0;
+
+	for (index = 0; index < num_devices; index++) {
+		release_awcloud_platform_chrdev(dev+index, index);
+	}
+
 	class_destroy(dev->class);
-	cdev_del(dev->cdev);
-	unregister_chrdev_region(dev->dev_id, 1);
+	unregister_chrdev_region(MKDEV(major, 0), num_devices);
 	kfree(dev);
 }
 
-module_init(awcloud_async_init);
-module_exit(awcloud_async_exit);
+module_init(awcloud_platform_init);
+module_exit(awcloud_platform_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("zhangjl@awcloud.com");
